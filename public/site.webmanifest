@@ -1,6 +1,6 @@
 {
-    "name": "Map View",
-    "short_name": "Map View",
+    "name": "SV Maps",
+    "short_name": "SV Maps",
     "icons": [
         {
             "src": "/android-chrome-192x192.png",
@@ -15,6 +15,6 @@
     ],
     "theme_color": "#334e6d",
     "background_color": "#334e6d",
-    "start_url": "maps14.tanukij.dev",
+    "start_url": "/",
     "display": "standalone"
 }

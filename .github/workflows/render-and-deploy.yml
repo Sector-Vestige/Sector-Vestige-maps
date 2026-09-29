@@ -1,10 +1,12 @@
-﻿name: Render and Deploy
+name: Render and Deploy
 
 on:
   push:
     branches:
       - master
   workflow_dispatch:
+  repository_dispatch:
+    types: [maps-updated]
   schedule:
     - cron: "0 16 * * 6" # Every Saturday at 16:00 UTC
 
@@ -13,10 +15,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MAP_IMAGES_CACHE_BUST_VERSION: v4
-  MAP_RENDERER_CACHE_BUST_VERSION: v2
-  SS14_REPO: space-sunrise/sunrise-station
-  SS14_MAP_POOL: Resources/Prototypes/_Sunrise/Maps/Pools/default.yml
+  MAP_IMAGES_CACHE_BUST_VERSION: v5
+  MAP_RENDERER_CACHE_BUST_VERSION: v3
+  SS14_REPO: Sector-Vestige/Sector-Vestige
+  SS14_BRANCH: stable
+  SS14_MAP_POOL: Resources/Prototypes/_SV/Maps/Pools/SVmapPool.yml
+  SS14_MAP_POOL_ID: SVmapPool
 
 jobs:
   build-renderer:
@@ -28,7 +32,7 @@ jobs:
 
       - name: Get SS14 SHA for caching
         id: submodule-sha
-        run: echo "SS14_SHA=$(curl -s https://api.github.com/repos/${{ env.SS14_REPO }}/commits/master | jq -r '.sha')" >> $GITHUB_ENV
+        run: echo "SS14_SHA=$(curl -s https://api.github.com/repos/${{ env.SS14_REPO }}/commits/${{ env.SS14_BRANCH }} | jq -r '.sha')" >> $GITHUB_ENV
 
       - name: Cache renderer
         id: cache-renderer
@@ -43,6 +47,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SS14_REPO }}
+          ref: ${{ env.SS14_BRANCH }}
           path: ss14
           submodules: recursive
 
@@ -50,7 +55,7 @@ jobs:
         if: ${{ steps.cache-renderer.outputs.cache-hit != 'true' }}
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
 
       - name: Restore .NET dependencies
         if: ${{ steps.cache-renderer.outputs.cache-hit != 'true' }}
@@ -77,6 +82,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SS14_REPO }}
+          ref: ${{ env.SS14_BRANCH }}
           path: ss14
           submodules: false
 
@@ -86,7 +92,7 @@ jobs:
         with:
           cmd: |
             pool_file="ss14/${{ env.SS14_MAP_POOL }}"
-            json=$(cat "$pool_file" | yq --output-format=json --indent=0 '.[0].maps | unique')
+            json=$(cat "$pool_file" | yq --output-format=json --indent=0 '[.[] | select(.type == "gameMapPool" and .id == "${{ env.SS14_MAP_POOL_ID }}") | .maps[]] | unique')
             echo "json=${json}" >> $GITHUB_OUTPUT
 
   render:
@@ -96,6 +102,7 @@ jobs:
       - prepare-matrix
 
     strategy:
+      fail-fast: false
       matrix:
 #        map: [SunriseBox]
         map: ${{ fromJSON(needs.prepare-matrix.outputs.maps) }}
@@ -106,7 +113,7 @@ jobs:
 
       - name: Get SS14 SHA for caching
         id: submodule-sha
-        run: echo "SS14_SHA=$(curl -s https://api.github.com/repos/${{ env.SS14_REPO }}/commits/master | jq -r '.sha')" >> $GITHUB_ENV
+        run: echo "SS14_SHA=$(curl -s https://api.github.com/repos/${{ env.SS14_REPO }}/commits/${{ env.SS14_BRANCH }} | jq -r '.sha')" >> $GITHUB_ENV
 
       - name: Cache map images
         id: cache-images
@@ -120,6 +127,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SS14_REPO }}
+          ref: ${{ env.SS14_BRANCH }}
           path: ss14
           submodules: true
 
@@ -136,7 +144,7 @@ jobs:
         if: ${{ steps.cache-images.outputs.cache-hit != 'true' }}
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
 
       - name: Render map
         if: ${{ steps.cache-images.outputs.cache-hit != 'true' }}
@@ -151,6 +159,8 @@ jobs:
   build-viewer:
     runs-on: ubuntu-latest
     needs: render
+    # Deploy whatever maps did render, even if some matrix jobs failed
+    if: ${{ !cancelled() && needs.render.result != 'skipped' }}
 
     steps:
       - name: Checkout repository
@@ -164,10 +174,15 @@ jobs:
           merge-multiple: true
 
       - name: List map images
-        run: ls -R public/maps
+        run: |
+          ls -R public/maps
+          if ! compgen -G "public/maps/*/map.json" > /dev/null; then
+            echo "::error::No maps were rendered"
+            exit 1
+          fi
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
 
